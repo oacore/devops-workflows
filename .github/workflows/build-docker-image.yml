@@ -3,9 +3,6 @@ name: Build and Push Docker Image to ACR
 on:
   workflow_call:
     inputs:
-      acr_name:
-        required: true
-        type: string
       image_name:
         required: true
         type: string
@@ -38,6 +35,9 @@ permissions:
   id-token: write
   contents: read
 
+env:
+  ACR_NAME: corefrontend
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
@@ -60,11 +60,10 @@ jobs:
         run: echo "tag=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
 
       - name: Docker ACR Login
-        run: az acr login --name ${{ inputs.acr_name }}
+        run: az acr login --name ${{ env.ACR_NAME }}
 
       - name: Docker Build and Push
         env:
-          ACR_NAME: ${{ inputs.acr_name }}
           IMAGE_NAME: ${{ inputs.image_name }}
           TAG: ${{ steps.set_tag.outputs.tag }}
           DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
