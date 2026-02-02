@@ -1,4 +1,4 @@
-name: Reusable - Container App Build & Push
+name: Reusable - Build & Push Docker Image
 
 on:
   workflow_call:
@@ -10,24 +10,6 @@ on:
         type: string
         required: true
 
-      RESOURCE_GROUP:
-        type: string
-        required: true
-      PROD_APP_NAME:
-        type: string
-        required: true
-      STAGING_RESOURCE_GROUP:
-        type: string
-        required: true
-      STAGING_APP_NAME:
-        type: string
-        required: true
-
-      PORT:
-        type: string
-        required: false
-        default: "8080"
-
       target_env:
         type: string
         required: false
@@ -37,6 +19,7 @@ on:
         required: false
         default: "containerapp_deploy"
 
+      # Non-secret build args (KEY=VALUE, one per line)
       BUILD_ARGS:
         type: string
         required: false
@@ -50,6 +33,7 @@ on:
       AZURE_SUBSCRIPTION_ID:
         required: true
 
+      # Optional secrets that become build args (forward from caller)
       APP_SECRET:
         required: false
       DATABASE_URL:
@@ -62,8 +46,6 @@ on:
         value: ${{ jobs.build-and-push.outputs.tag }}
       deploy_env:
         value: ${{ jobs.build-and-push.outputs.deploy_env }}
-      app_name:
-        value: ${{ jobs.build-and-push.outputs.app_name }}
       ref_to_build:
         value: ${{ jobs.build-and-push.outputs.ref_to_build }}
       branch_tag:
@@ -82,7 +64,6 @@ jobs:
     outputs:
       tag: ${{ steps.vars.outputs.tag }}
       deploy_env: ${{ steps.vars.outputs.deploy_env }}
-      app_name: ${{ steps.vars.outputs.app_name }}
       ref_to_build: ${{ steps.vars.outputs.ref_to_build }}
       branch_tag: ${{ steps.vars.outputs.branch_tag }}
       image_tag: ${{ steps.vars.outputs.image_tag }}
@@ -106,16 +87,13 @@ jobs:
             | sed -E 's#[^a-z0-9_.-]+#-#g' | sed -E 's#^-+##; s#-+$##' | cut -c1-40)"
 
           if [[ "${DEPLOY_ENV}" == "prod" ]]; then
-            APP_NAME="${{ inputs.PROD_APP_NAME }}"
             IMAGE_TAG="prod"
           else
-            APP_NAME="${{ inputs.STAGING_APP_NAME }}"
             IMAGE_TAG="stg-${BRANCH_TAG}"
           fi
 
           echo "tag=${SHA7}" >> "$GITHUB_OUTPUT"
           echo "deploy_env=${DEPLOY_ENV}" >> "$GITHUB_OUTPUT"
-          echo "app_name=${APP_NAME}" >> "$GITHUB_OUTPUT"
           echo "ref_to_build=${REF_TO_BUILD}" >> "$GITHUB_OUTPUT"
           echo "branch_tag=${BRANCH_TAG}" >> "$GITHUB_OUTPUT"
           echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
@@ -144,7 +122,7 @@ jobs:
             INSTALL_DEV=false
           fi
 
-          # input-provided args (non-secrets OK)
+          # input-provided args (non-secrets)
           EXTRA_ARGS=""
           while IFS= read -r line; do
             [[ -z "${line// }" ]] && continue
