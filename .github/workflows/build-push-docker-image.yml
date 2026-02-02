@@ -50,6 +50,13 @@ on:
       AZURE_SUBSCRIPTION_ID:
         required: true
 
+      APP_SECRET:
+        required: false
+      DATABASE_URL:
+        required: false
+      API_KEY:
+        required: false
+
     outputs:
       tag:
         value: ${{ jobs.build-and-push.outputs.tag }}
@@ -137,15 +144,23 @@ jobs:
             INSTALL_DEV=false
           fi
 
+          # input-provided args (non-secrets OK)
           EXTRA_ARGS=""
           while IFS= read -r line; do
             [[ -z "${line// }" ]] && continue
             EXTRA_ARGS="$EXTRA_ARGS --build-arg $line"
           done <<< "${{ inputs.BUILD_ARGS }}"
 
+          # forwarded secrets -> build args (only if present)
+          SECRET_ARGS=""
+          [[ -n "${{ secrets.APP_SECRET }}"   ]] && SECRET_ARGS="$SECRET_ARGS --build-arg APP_SECRET=${{ secrets.APP_SECRET }}"
+          [[ -n "${{ secrets.DATABASE_URL }}" ]] && SECRET_ARGS="$SECRET_ARGS --build-arg DATABASE_URL=${{ secrets.DATABASE_URL }}"
+          [[ -n "${{ secrets.API_KEY }}"      ]] && SECRET_ARGS="$SECRET_ARGS --build-arg API_KEY=${{ secrets.API_KEY }}"
+
           docker build \
             --build-arg INSTALL_DEV=$INSTALL_DEV \
             $EXTRA_ARGS \
+            $SECRET_ARGS \
             -t ${{ inputs.ACR_NAME }}.azurecr.io/${{ inputs.IMAGE_NAME }}:${{ steps.vars.outputs.tag }} \
             -t ${{ inputs.ACR_NAME }}.azurecr.io/${{ inputs.IMAGE_NAME }}:${{ steps.vars.outputs.image_tag }} .
 
