@@ -1,0 +1,155 @@
+name: Reusable - Container App Build & Push
+
+on:
+  workflow_call:
+    inputs:
+      ACR_NAME:
+        type: string
+        required: true
+      IMAGE_NAME:
+        type: string
+        required: true
+
+      RESOURCE_GROUP:
+        type: string
+        required: true
+      PROD_APP_NAME:
+        type: string
+        required: true
+      STAGING_RESOURCE_GROUP:
+        type: string
+        required: true
+      STAGING_APP_NAME:
+        type: string
+        required: true
+
+      PORT:
+        type: string
+        required: false
+        default: "8080"
+
+      target_env:
+        type: string
+        required: false
+        default: "staging"
+      branch:
+        type: string
+        required: false
+        default: "containerapp_deploy"
+
+      BUILD_ARGS:
+        type: string
+        required: false
+        default: ""
+
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+
+    outputs:
+      tag:
+        value: ${{ jobs.build-and-push.outputs.tag }}
+      deploy_env:
+        value: ${{ jobs.build-and-push.outputs.deploy_env }}
+      app_name:
+        value: ${{ jobs.build-and-push.outputs.app_name }}
+      ref_to_build:
+        value: ${{ jobs.build-and-push.outputs.ref_to_build }}
+      branch_tag:
+        value: ${{ jobs.build-and-push.outputs.branch_tag }}
+      image_tag:
+        value: ${{ jobs.build-and-push.outputs.image_tag }}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    environment: azure
+    outputs:
+      tag: ${{ steps.vars.outputs.tag }}
+      deploy_env: ${{ steps.vars.outputs.deploy_env }}
+      app_name: ${{ steps.vars.outputs.app_name }}
+      ref_to_build: ${{ steps.vars.outputs.ref_to_build }}
+      branch_tag: ${{ steps.vars.outputs.branch_tag }}
+      image_tag: ${{ steps.vars.outputs.image_tag }}
+
+    steps:
+      - name: Compute variables
+        id: vars
+        shell: bash
+        run: |
+          SHA7="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            DEPLOY_ENV="${{ inputs.target_env }}"
+            REF_TO_BUILD="${{ inputs.branch }}"
+          else
+            DEPLOY_ENV="staging"
+            REF_TO_BUILD="${GITHUB_REF_NAME}"
+          fi
+
+          BRANCH_TAG="$(echo "${REF_TO_BUILD}" | tr '[:upper:]' '[:lower:]' \
+            | sed -E 's#[^a-z0-9_.-]+#-#g' | sed -E 's#^-+##; s#-+$##' | cut -c1-40)"
+
+          if [[ "${DEPLOY_ENV}" == "prod" ]]; then
+            APP_NAME="${{ inputs.PROD_APP_NAME }}"
+            IMAGE_TAG="prod"
+          else
+            APP_NAME="${{ inputs.STAGING_APP_NAME }}"
+            IMAGE_TAG="stg-${BRANCH_TAG}"
+          fi
+
+          echo "tag=${SHA7}" >> "$GITHUB_OUTPUT"
+          echo "deploy_env=${DEPLOY_ENV}" >> "$GITHUB_OUTPUT"
+          echo "app_name=${APP_NAME}" >> "$GITHUB_OUTPUT"
+          echo "ref_to_build=${REF_TO_BUILD}" >> "$GITHUB_OUTPUT"
+          echo "branch_tag=${BRANCH_TAG}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.vars.outputs.ref_to_build }}
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Docker ACR Login
+        run: az acr login --name ${{ inputs.ACR_NAME }}
+
+      - name: Docker Build
+        shell: bash
+        run: |
+          if [[ "${{ steps.vars.outputs.deploy_env }}" == "staging" ]]; then
+            INSTALL_DEV=true
+          else
+            INSTALL_DEV=false
+          fi
+
+          EXTRA_ARGS=""
+          while IFS= read -r line; do
+            [[ -z "${line// }" ]] && continue
+            EXTRA_ARGS="$EXTRA_ARGS --build-arg $line"
+          done <<< "${{ inputs.BUILD_ARGS }}"
+
+          docker build \
+            --build-arg INSTALL_DEV=$INSTALL_DEV \
+            $EXTRA_ARGS \
+            -t ${{ inputs.ACR_NAME }}.azurecr.io/${{ inputs.IMAGE_NAME }}:${{ steps.vars.outputs.tag }} \
+            -t ${{ inputs.ACR_NAME }}.azurecr.io/${{ inputs.IMAGE_NAME }}:${{ steps.vars.outputs.image_tag }} .
+
+      - name: Docker Push
+        run: |
+          docker push ${{ inputs.ACR_NAME }}.azurecr.io/${{ inputs.IMAGE_NAME }}:${{ steps.vars.outputs.tag }}
+          docker push ${{ inputs.ACR_NAME }}.azurecr.io/${{ inputs.IMAGE_NAME }}:${{ steps.vars.outputs.image_tag }}
