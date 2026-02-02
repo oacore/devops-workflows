@@ -5,7 +5,9 @@ on:
     inputs:
       ACR_NAME:
         type: string
-        required: true
+        required: false
+        default: "corecontainers"
+
       IMAGE_NAME:
         type: string
         required: true
@@ -19,7 +21,6 @@ on:
         required: false
         default: "containerapp_deploy"
 
-      # Non-secret build args (KEY=VALUE, one per line)
       BUILD_ARGS:
         type: string
         required: false
@@ -33,7 +34,6 @@ on:
       AZURE_SUBSCRIPTION_ID:
         required: true
 
-      # Optional secrets that become build args
       APP_SECRET:
         required: false
       DATABASE_URL:
@@ -102,10 +102,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.vars.outputs.ref_to_build }}
-          
-      - name: Debug ACR
-        run: |
-          echo "ACR_NAME='${{ inputs.ACR_NAME }}'"
 
       - name: Azure Login
         uses: azure/login@v2
@@ -117,24 +113,31 @@ jobs:
       - name: Docker ACR Login
         run: az acr login --name ${{ inputs.ACR_NAME }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Docker Build
+        shell: bash
+        run: |
+          if [[ "${{ steps.vars.outputs.deploy_env }}" == "staging" ]]; then
+            INSTALL_DEV=true
+          else
+            INSTALL_DEV=false
+          fi
 
-      - name: Build and Push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ inputs.ACR_NAME }}.azurecr.io/${{ inputs.IMAGE_NAME }}:${{ steps.vars.outputs.tag }}
-            ${{ inputs.ACR_NAME }}.azurecr.io/${{ inputs.IMAGE_NAME }}:${{ steps.vars.outputs.image_tag }}
+          EXTRA_ARGS=""
+          while IFS= read -r line; do
+            [[ -z "${line// }" ]] && continue
+            EXTRA_ARGS="$EXTRA_ARGS --build-arg $line"
+          done <<< "${{ inputs.BUILD_ARGS }}"
 
-          build-args: |
-            INSTALL_DEV=${{ steps.vars.outputs.deploy_env == 'staging' && 'true' || 'false' }}
-            ${{ inputs.BUILD_ARGS }}
-            APP_SECRET=${{ secrets.APP_SECRET }}
-            DATABASE_URL=${{ secrets.DATABASE_URL }}
-            API_KEY=${{ secrets.API_KEY }}
+          docker build \
+            --build-arg INSTALL_DEV=$INSTALL_DEV \
+            $EXTRA_ARGS \
+            --build-arg APP_SECRET=${{ secrets.APP_SECRET }} \
+            --build-arg DATABASE_URL=${{ secrets.DATABASE_URL }} \
+            --build-arg API_KEY=${{ secrets.API_KEY }} \
+            -t ${{ inputs.ACR_NAME }}.azurecr.io/${{ inputs.IMAGE_NAME }}:${{ steps.vars.outputs.tag }} \
+            -t ${{ inputs.ACR_NAME }}.azurecr.io/${{ inputs.IMAGE_NAME }}:${{ steps.vars.outputs.image_tag }} .
 
-          cache-from: type=registry,ref=${{ inputs.ACR_NAME }}.azurecr.io/${{ inputs.IMAGE_NAME }}:cache
-          cache-to: type=registry,ref=${{ inputs.ACR_NAME }}.azurecr.io/${{ inputs.IMAGE_NAME }}:cache,mode=max
+      - name: Docker Push
+        run: |
+          docker push ${{ inputs.ACR_NAME }}.azurecr.io/${{ inputs.IMAGE_NAME }}:${{ steps.vars.outputs.tag }}
+          docker push ${{ inputs.ACR_NAME }}.azurecr.io/${{ inputs.IMAGE_NAME }}:${{ steps.vars.outputs.image_tag }}
